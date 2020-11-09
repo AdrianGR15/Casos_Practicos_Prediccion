@@ -1,0 +1,328 @@
+---
+title: "CP02 NBA con Cross Validation y Elastic Net."
+author: "Adrián González Retamosa"
+date: "9/11/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+---
+
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.height = 7, fig.width = 10)
+```
+
+# Indice
+
+1. Descripcion del Data Set y objetivos del trabajo.
+
+2. Tratamiento del DataSet  
+
+3. Algoritmo de eleccion de variables y cross validation para elegir el modelo de menor error.    
+
+4. Metodo de regularizacion: ELASTIC NET
+
+5. Prediccion
+
+6. Conslusiones
+
+
+
+## 1. Descripcion del Data Set y objetivos del trabajo.
+
+Las variables a trabjar son:
+
+Player - Nombre jugador 
+
+Salary - Salario del jugador 
+
+NBA_Country - Pais origen jugador 
+
+NBA_DraftNumber - Numero en el Draft del jugador 
+
+Age - años
+
+Tm - Equipo del jugador  
+
+G - Partidos jugados 
+
+MPMP = Minutos jugados
+
+PER - Índice de eficiencia del jugador Una medida de la producción por minuto estandarizada de manera que el promedio de la liga es 15.
+
+TSp - Porcentaje de tiros reales Una medida de la eficiencia de los tiros que tiene en cuenta tiros de campo de 2 puntos, tiros de campo de 3 puntos y tiros libres.
+
+3PAr - Tasa de intentos de 3 puntos Porcentaje de intentos de FG desde el rango de 3 puntos
+
+FTr - Tasa de intentos de tiros libres Número de intentos de FT por intento de tiro libre
+
+ORBp - Porcentaje de rebote ofensivo Una estimación del porcentaje de rebotes ofensivos disponibles que un jugador agarró mientras estaba en la cancha.
+
+DRBp - Porcentaje de rebote defensivo Una estimación del porcentaje de rebotes defensivos disponibles que un jugador agarró mientras estaba en la cancha.
+
+TRBp - Porcentaje de rebote total Una estimación del porcentaje de rebotes disponibles que un jugador agarró mientras estaba en la cancha.
+
+ASTp - Porcentaje de asistencia Una estimación del porcentaje de goles de campo de un compañero de equipo que un jugador ayudó mientras estaba en la cancha.
+
+STLp - Porcentaje de robo Una estimación del porcentaje de posesiones del oponente que terminan con un robo del jugador mientras estaba en la cancha.
+
+BLKp - Porcentaje de bloqueo Una estimación del porcentaje de intentos de gol de campo de dos puntos del oponente bloqueados por el jugador mientras estaba en el suelo.
+
+TOVp - Porcentaje de rotación Una estimación de las pérdidas de balón cometidas por cada 100 jugadas.
+
+USGp - Porcentaje de uso Una estimación del porcentaje de jugadas de equipo utilizadas por un jugador mientras estaba en la cancha.
+
+OWS - Offensive Win Shares Una estimación del número de victorias aportadas por un jugador debido a su infracción.
+
+DWS - Defensive Win Shares Una estimación del número de victorias aportadas por un jugador debido a su defensa.
+
+WS - Win Shares Una estimación del número de victorias aportadas por un jugador.
+
+WS / 48 - Acciones de ganancias por 48 minutos Una estimación del número de victorias aportadas por un jugador por 48 minutos (el promedio de la liga es aproximadamente .100)
+
+OBPM - Offensive Box Plus / Minus Una estimación de la puntuación de la caja de los puntos ofensivos por cada 100 posesiones que un jugador contribuyó por encima de un jugador promedio de la liga, traducido a un equipo promedio.
+
+DBPM - Defensive Box Plus / Minus Una estimación de la puntuación de caja de los puntos defensivos por cada 100 posesiones que un jugador contribuyó por encima de un jugador promedio de la liga, traducido a un equipo promedio.
+
+BPM - Box Plus / Minus Una estimación de la puntuación de caja de los puntos por cada 100 posesiones que un jugador contribuyó por encima de un jugador promedio de la liga, traducido a un equipo promedio.
+
+VORP - Valor sobre el jugador de reemplazo Una estimación de la puntuación de los puntos por cada 100 posesiones del EQUIPO que un jugador contribuyó por encima de un jugador de nivel de reemplazo (-2.0), traducido a un equipo promedio y prorrateado a una temporada de 82 juegos
+
+El objetivo de este trabajo es seguir trabajando con el data set de la NBA una vez que ya conocemos en mayor detalle los datos a trabajar. En este segundo ejercicio de este data set realizaremos cross validation para la eleccion del modelo con menor error a traves del método de Elastic Net.
+
+
+## 2. Limpieza y analisis del data set
+
+
+
+Cargamos las librerias necesarias para nuestro trabajo junto al dataset de trabajo
+````{r  }
+library(readr)
+library(here) 
+library(tidyverse)
+library(janitor) 
+library(skimr) 
+library(magrittr)
+library(corrplot) 
+library(ggcorrplot)  
+library(PerformanceAnalytics)
+library(leaps) 
+library(rsample)
+library(glmnet)
+library(boot)
+library(caret)
+
+setwd('/Users/adrian_gr/Desktop/Data_Science/Prediccion/CP02/data')
+df <-  read_csv("nba.csv")
+
+```
+
+El siguiente paso sera conocer mejor el data set, asi como limpiar los valores nulos y repetidos
+```{r}
+df %<>% clean_names() 
+colnames(df) 
+#Quitamos valores repetidos y NaN
+df %<>% distinct(player,.keep_all= TRUE)  
+df %<>% drop_na()
+```
+
+Una vez que tenemos el dataset limpio pasamos a comprobar las relaciones existentes entre las variables no categoricas con el Log del salario. 
+```{r fig.height = 10, fig.width = 10, fig.align = "center"}
+#vamos a hacer un grafico en el que observemos las relaciones de las variables 
+#con el Log_Salario, eliminado las variables categoricas
+df %>%  
+  select_at(vars(-c("player","nba_country","tm"))) %>% #decimos que selecionamos todas menos esas 
+  tidyr::gather("id", "value", 2:25) %>%  #creamos un DF con un id para cada variable, evidenmte para todos menos para el salario, por eso 2:25, empezamos en la segund avariable que tengamos.
+  ggplot(., aes(y=log(salary), x=value))+
+  geom_point()+
+  geom_smooth(method = "lm", se=FALSE, color="black")+
+  facet_wrap(~id,ncol=2,scales="free_x")
+
+#vemos que es mejor trabajar con el Log por lo que transformamos la variable Salary
+df_log <- df %>% 
+  mutate(salary=log(salary))
+
+#realizamos un grafico de correlaciones, sin las variables especificadas.
+vars <- c("player","nba_country","tm") 
+
+ggcorrplot(cor(df_log %>% 
+                 select_at(vars(-vars)), 
+               use = "complete.obs"),
+           hc.order = TRUE,
+           type = "lower",  lab = TRUE)
+```
+
+Acontinuacion observaremos la multicolinealidad entre los regresores.
+```{r}
+#vamos a correr el primer modelo con todas las variables menos las categoricas para ver 
+#el valor VIF que indica multicoliealidad y es preoupante si supera el valor 5
+model_vif <- lm(salary~.-player-nba_country-tm, data=df_log) #regresion con todo menos con las variables categoricas 
+valores_vif <- car::vif(model_vif) #el vif no debe superar el 5 para no dar problemas de multicolinealida. aqui hay numero muy elevados debemos quitar primero esos y luego ir volviendo a calcularlo para ver si va bajando ese numero  
+valores_vif
+
+barplot(valores_vif, main = "VIF Values", horiz = TRUE, col = "steelblue") #representamos el resultado del VIF 
+abline(v = 5, lwd = 3, lty = 2)
+
+knitr::kable(valores_vif) #vemos que hay mucho valor que superar ese umbral y ademas por mucho
+```
+
+## 3. Algoritmo de eleccion de variables y cross validation para elegir el modelo de menor error.
+
+Una vez que conocemos la relacion entre las variable utilizaremos el algoritmo BEST SUBSET para elegir las variables que nos permitan construir el modelo con mejores prediccion.
+
+Primero construiremos un dataframe solo con las variables no categoricas y realizaremos una subdivision entre datos de entrenamiento y datos de test
+```{r}
+categoricas <- c("player","nba_country","tm") 
+nba <- df_log %>% select_at(vars(-categoricas)) #con Log_salary
+  #2. Muestra de entrenamiento y de preddicion.
+set.seed(16898)
+
+sub_data <- initial_split(nba, prob = 0.8, strate = salary)
+train_data <- training(sub_data)
+fore_data <- testing(sub_data)
+
+```
+
+Utilizamos el algoritmos de BEST SUBSET
+```{r}
+model_select <- regsubsets(salary ~. , data =train_data, method = "seqrep",nvmax=24)
+model_select_summary <- summary(model_select) #todos los modelos posibles con este metodo
+```
+
+Creamos una tabla con los valores de R2 adj, CP y BIC para comparar los mejores los modelos y quedarnos con el mejor de cada uno de los criterios
+```{r}
+comparacion <- data.frame(
+  Adj.R2 = (model_select_summary$adjr2),
+  CP = (model_select_summary$cp),
+  BIC = (model_select_summary$bic)
+)
+```
+
+Y realizamos una consulta para saber que modelo es mejor segun cada criterio. 
+```{r}
+ganadores <- data.frame(
+  Adj.R2 = which.max(model_select_summary$adjr2),
+  CP = which.min(model_select_summary$cp),
+  BIC = which.min(model_select_summary$bic)
+)
+ganadores
+```
+
+A continuacion realizaremos Cross Validation para observar que modelo es el que tiene en media menor error cuadratico medio. Para ellos utilizaremos el metodo de ONE-LEAVE_OUT con los datos de toda la muestra
+
+Modelo asociado al mejor R2adj
+```{r}
+coef(model_select, which.max(model_select_summary$adjr2)) #me indica los coef que tengo que utilizar en R2
+set.seed(16898) #para ver cual empezamos a quitar
+glmR <- glm(salary~nba_draft_number+ age+mp+per+ts_percent+x3p_ar+f_tr+orb_percent+trb_percent+tov_percent+usg_percent+dws+ws_48 + bpm, data = nba, family = gaussian() )
+coef(glmR)
+err_R <- cv.glm(nba, glmR)
+err_R$delta   
+```
+
+Modelo asociado al mejor CP
+```{r fig.width = 5}
+coef(model_select,which.min(model_select_summary$cp)) #me indica los coef que tengo que utilizar en CP
+set.seed(16893)
+glmCP <- glm(salary~nba_draft_number+age+mp+per+ts_percent+drb_percent+tov_percent+usg_percent+bpm,data = nba,family = gaussian())
+coef(glmCP)
+err_CP <- cv.glm(nba, glmCP)
+err_CP$delta #1.07
+```
+
+Modelo asociado al mejor BIC 
+```{r}
+coef(model_select,which.min(model_select_summary$bic)) #me indica los coef que tengo que utilizar en BIC
+set.seed(16890)
+glmBIC <- glm(salary ~ nba_draft_number + age + mp + drb_percent, data = nba, family = gaussian())
+coef(glmBIC)
+err_BIC <- cv.glm(nba, glmBIC)
+err_BIC$delta #1.06
+```
+
+Despues de realizar el CV observamos que el modelo con menor error en media es el asociado al criterio de informacion BIC: salary = nba_draft_number + age + mp + drb
+
+## 4. Metodo de regularizacion: ELASTIC NET
+
+El update de este trabajo consiste en utilizar metodos de regularicacion con el objetivo de encontrar los mejores hiperparametros. Utilizaremos el modelo Elastic Net, una combinacion entre los modelos Ridge y Lasso, con el objetivo de encontrar el alpha y el lambda que nos permita minimizar el error cuadratico medio de nuestro modelos a traves de la Cross Validation. Volveremos a dividir la muestra en datos de entrenamiento y datos de test para comprobar como predice nuestro modelo.
+
+Train data y test data
+```{r}
+set.seed(1789)
+sub_data <- initial_split(nba, prop = .8, strata = "salary")
+train_sub <- training(sub_data) #sub data set de entrenamiento
+fore_sub <- testing(sub_data) #sub data set de prediccion 
+
+train_sub_x <- model.matrix(salary ~ ., train_sub)[, -1] #matriz de regresores
+train_sub_y <- train_sub$salary #lista variable dependiente
+fore_sub_x <- model.matrix(salary ~ ., fore_sub)[, -1] #matriz regresores pra prediccion
+fore_sub_y <- fore_sub$salary #lista variable dependiente para prediccion 
+```
+
+Antes de calcular al alpha optimo vamos a crear una tabla que iremos rellenando con los diferentes erores para cada valor de alpha. Y creamos la muestra para ir rellenando la tabla con los diferentes alphas, en pasos de 0,2.
+```{r }
+muestra <- sample(1:10, size = length(train_sub_y), replace=TRUE)
+
+tabla_alfa <- tibble::tibble(
+  alpha = seq(0, 1, by = 0.02),
+  mse_min = NA,
+  lamda_min = NA,
+  mse_1se = NA,
+  lamda_1se = NA,
+)
+```
+
+Utilizamos el metodo cv.glm() para ir rellenado la tabla mediante cross validation y asi encontrar el alpha asociado al error minimo. 
+```{r}
+for(i in seq_along(tabla_alfa$alpha)) {
+  ajuste <- cv.glmnet(train_sub_x, train_sub_y, alpha = tabla_alfa$alpha[i], foldid = muestra)
+  
+  tabla_alfa$mse_min[i] <- ajuste$cvm[ajuste$lambda == ajuste$lambda.min] #esa columna la vamos a rellenar con el error cuadratico medio min, asociado a ese lambda
+  tabla_alfa$lamda_min[i] <- ajuste$lambda.min #ese lambda que hace ECM min
+  tabla_alfa$mse_1se[i] <- ajuste$cvm[ajuste$lambda == ajuste$lambda.1se] #lo rellenamos solo con los errores estandar min para cada alfa 
+  tabla_alfa$lamda_1se[i] <- ajuste$lambda.1se #los lambda correpsondientes
+
+}
+```
+
+
+Vamos a ordenar la tabla para ver que alpha es el que nos proporciona un menor error. Observamos que el menor error esta asociado al alpha 1, por lo que el modelo que min el error es un Lasso
+```{r}
+tabla_alfa_ordered <- tabla_alfa %>% 
+  arrange(mse_min)
+tabla_alfa_ordered
+```
+
+
+Una vez tenemos la tabla creada vamos a representar con va evolucionando el error segun cambia alpha
+```{r}
+tabla_alfa %>% 
+  mutate(se = mse_1se - mse_min) %>% #para crear la especie de IC
+  ggplot(aes(alpha, mse_min)) +
+  geom_line(size = 2) +
+  geom_ribbon(aes(ymax = mse_min + se, ymin = mse_min - se), alpha = .25) + 
+  ggtitle("MSE ± one standard error")
+
+tabla_alfa %>%
+  filter(mse_min == min(mse_min))
+```
+
+Una vez tenemos el modelo realizamos la prediccion sobre la muestra de entrenamiento, con un alpha asociado al modelo de 1, ya que como hemos observado es el que presenta el menor MSE.
+```{r mejor modelo}
+modeloL <- cv.glmnet(train_sub_x, train_sub_y, alpha = 1.0)
+coef(modeloL) # observamos los coef que formar el modelo de menor MSE
+min(modeloL$cvm) # error cuadrático medio a traves de cross validation
+```
+
+Por ultimo, realizamos una prediccion sobre la muestra de test para ver cual es el verdadero error de prediccion de nuestro modelo. 
+```{r prediccion}
+test <- predict(modeloL, 
+                      l = modeloC$lambda.min, 
+                      fore_sub_x)
+mean((fore_sub_y - test)^2) 
+# error cuadrado medio: real menos estimado, diferencia al cuadrado
+```
+
+
+## 5. Conclusion.
+Como update de este trabajo hemos utilizado el metodo de regularizacion de elastic net, el cual es un hibrido entre el metodo Ridge y Lasso. El resultado obtenido concluye que el alpha asociado al MSE min es igual a 1, por lo que estariamos hablando de un modelo Lasso. Este modelo consiste en una doble penalizacion: coeficientes de regresores elevados y existencia de coeficientes con valores proximos a 0, los cuales elimina. Con este modelo obtenemos un error de prediccion de 1.11 sobre la muestra de entrenamiento y un 1.07 sobre la muestra de tests. 
