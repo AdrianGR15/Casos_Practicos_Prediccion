@@ -1,0 +1,193 @@
+---
+title: "Apple Ventas"
+author: "Adrián González Retamosa"
+date: "11/16/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE, 
+                      fig.height = 5, fig.width = 10, fig.align = 'center')
+```
+
+
+# OBJETIVOS
+
+Estudiar el comportamiento estacionario de la serie, estimar modelos ETS y ARIMA para comprobar cual de los dos presenta menores errores de predicción.
+
+# Esquema 
+
+1. Presentación de la serie de ingresos trimestrales de Apple.
+
+2. Modelo ETS.
+
+3. Modelo ARIMA.
+
+4. Comparación y conclusiones.
+
+
+## 1. Presentación de la serie de ingresos trimestrales de Apple.
+
+```{r librarys, warning=FALSE}
+library(readr)
+library(forecast)
+library(xts)
+library(ggplot2)
+library(ggfortify)
+library(tidyverse)
+
+```
+
+
+```{r carga de datos}
+setwd("/Users/adrian_gr/desktop")
+df_a <- read.csv('IngresosApple.csv', sep = ';', dec = ',')
+```
+
+
+Antes de convertir el dataframe en una serie temporal tomamos el log de los Ingresos que será con lo que trabajaremos.
+
+```{r log}
+#ponemos los ingresos en terminos log
+df_a <- df_a %>% 
+  mutate(Ingresos = log(Ingresos))
+```
+
+
+```{r creamos un objeto de serie temporal}
+#creamos una seq con las fechas correspondientes
+date <- seq(as.Date("2008-06-30"), as.Date("2017-09-30"), by = "quarter")
+
+#la añadamimos a nuestro dataset para luego utilizarlo en la construccion de la serie temporal
+df_a <- df_a %>% 
+  mutate(fecha = date)
+
+#creamos la serie temporal de los ingresos de apple
+ingresos <- xts(df_a$Ingresos, order.by = as.Date(df_a$fecha, '%Y/%m/%d'), frequency=4)
+
+#lo convertimos a trimestral por si tuviesemos problemas
+ingresos_q <- to.quarterly(ingresos)
+ingresos_q <- as.zoo(ingresos_q$ingresos.Open)
+names(ingresos_q) <- 'ingresos'
+
+#graficamos
+autoplot(ingresos_q)
+```
+Vemos que no es estacionaria  Tambien podemos intuir un modelo aditivo en el componente tendencial y multiplicativo en el estacional.
+
+```{r componente estacional}
+tsIngresos=ts(coredata(ingresos), start = c(2008, 2), frequency = 4)
+ggfreqplot(tsIngresos, freq=4, nrow=1, facet.labeller=c("1T","2T","3T","4T")) + 
+ggtitle("Ingresos trimestrales Trimestrales")
+```
+Como era de esperar los ingresos medios de apple aumentan en el último cuatrimestre ya que es el periodo en el cual se anuncian la mayoría de nuevos productos.
+
+El objetivo es predecir los ingresos para los trimestres de 2017, para ello vamos a eliminar estos datos de la serie para poder predecir sobre ellos.
+
+```{r división de la muestra}
+n_fore <- 3
+obs <- length(ingresos_q)
+ingresos_train <- window(ingresos_q, 
+                        start = index(ingresos_q[1]),
+                        end = index(ingresos_q[obs - n_fore]))
+```
+
+
+## 2. Modelo ETS.
+
+Generamos un modelo ETS de forma automatica que nos indicara las estructura de los componentes estacionales, tendenciales y del error. 
+
+```{r modelo ETS}
+# eleccion del modelo ETS por cross validation 
+m_ets <- ets(ingresos_train)
+
+#Analizamos el modelo obtenido y las predicciones
+fore_ets <- forecast(m_ets)
+summary(fore_ets)
+
+#Grafico de prediccion modelo ETS
+plot(fore_ets)
+lines(window(ingresos_q),type="o")
+```
+Como se podia observar en el grafico, el componente tendencial es aditivo y el estacional multiplicativo.
+
+A continuación mostramos una tabla con los errores de predicción del modelo ETS, que utilizamos para compararlo con el modelo ARIMA
+
+```{r precision prediccion ETS}
+#obtenemos los diferentes tipos de errores de prediccion
+ajuste_ets<-ets(window(tsIngresos, end=2016+3/4))
+fingreos_ets=forecast(ajuste_ets, h= n_fore) 
+
+error_pre_ets <- forecast:::testaccuracy(fingreos_ets$mean, window(tsIngresos,start=2017),test = NULL, d = NULL, D = NULL)
+
+error_pre_ets <- as.data.frame(error_pre_ets)
+
+knitr::kable(error_pre_ets)
+```
+
+## 3. Modelo ARIMA.
+
+
+Observamos el modelo SARIMA mas simple posible, ya que no tiene autoregresivo ni media movil en la parte regular ni estacional, solo hemos tomado una diferencia en cada una de las partes.
+```{r modelo ARIMA}
+m_arima <- auto.arima(ingresos_train, lambda = 0)
+summary(m_arima) 
+```
+
+Con el contraste de JUNG-BOX comprobamos que no existe autocorrelación entre los residuos del modelo ya que obtenemos un p-valor superior al 5%, por lo que no rechazamos la Ho. También comprobamos que los residuos son un ruido blanco, media 0 y varianza constante, a traves del correlograma.  
+```{r analisis de los residuos}
+ggtsdisplay(m_arima$residuals)
+
+Box.test(m_arima$residuals,lag=12, fitdf=2, type="Lj")
+```
+
+Representamos las predicciones de nuestro modelo hasta finales de 2018, junto a la serie real.
+
+```{r prediccion ARIMA}
+df_real <- data.frame(value = as.vector(ingresos_q),
+                     time = time(ingresos_q)) #df con los valores reales
+
+fingresos_arima <- forecast(m_arima)
+
+ggplot(df_real) + 
+  geom_point(aes(x=time,y=value)) + # hacemos el grafico con los valores de las serie,  hasta el 3 trimeste de 2017
+  geom_line(aes(x=time,y=value)) + 
+  geom_forecast(fingresos_arima,alpha=0.3) + 
+  ggtitle("ARIMA: Predicción Apple")
+```
+
+## 4. Comparación y conclusiones.
+
+
+Observando la tabla de errores de prediccion vemos que en la mayoria de los criterios el modelo ETS tiene menores errores, lo que nos hace pensar que es un modelo mas preciso, por muy poco, a la hora de predecir.
+```{r comparacion}
+error_pre_arima <- c(-0.009433358, 0.1149941, 0.08310241, -0.08075189, 0.8077781, 0.3390024, -0.1045467)
+
+error_pre <- data.frame( ETS = error_pre_ets$error_pre_ets,
+                        ARIMA = error_pre_arima,
+                        row.names = c('ME', 'RMSE', 'MAE', 'MPE', 'MAPE', 'MASE', 'ACF1'))
+
+COMPARACIÓN <- ifelse((error_pre$ETS - error_pre$ARIMA < 0), 'ETS', 'ARIMA')
+error_pre1 <- cbind(error_pre, COMPARACIÓN)
+
+knitr::kable(error_pre1)
+```
+
+En el siguiente gráfico representamos juntas las predicciones del modelo ETS(azul) y del ARIMA(rojo) y observamos que el modelo ARIMA es un poco mas bajista.
+
+```{r graficos}
+ggplot(df_real) + 
+  geom_point(aes(x=time,y=value)) + 
+  geom_line(aes(x=time,y=value)) + 
+  geom_forecast(fingresos_arima,alpha=0.2, show.legend = T, col = 'red') + 
+  geom_forecast(fore_ets,alpha=0.2, show.legend = T, col ='skyblue')
+  ggtitle("ARIMA: Predicción Apple")
+```
+
+
+
+
+
+
