@@ -1,0 +1,286 @@
+---
+title: "Análisis series temporales: Colgate VS Crest"
+author: "Adrián González Retamosa"
+date: "23/18/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+  pdf_document: default
+---
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = FALSE, message = FALSE)
+```
+
+# OBJETIVOS 
+
+El objetivo del presente trabajo es realizar un análisis de la evolución de las cuotas de mercado de las empresas Colgate y Crest desde 1958 hasta principios de 1963. Para ello se utilizaran modelos ARIMA, ARIMAX, con análisis de intervención y busqueda de outliers, y funciones de tranferencia con la idea de generar un modelo que ayude a predecir las 16 primeres semanas de 1963. Este estudio se realiza en el marco de la competencia y la utilidad del marketing, ya que como es sabido, Colgate disfrutaba de una cuota de mercado cercana al 40% hasta el 1 de agosto de 1960, cuando la asociación de dentistas de EEUU realizaron un comunicado recomendando el uso de Crest. A partir de dicha fecha la cuota de Crest superó a la de Colgate. 
+
+
+# Esquema 
+
+1. Presentación de las series temporales
+2. Modelos ARIMA
+3. Modelos ARIMAX, análisis de intervención y outliers.
+4. Funcion de transferencia. 
+
+
+## 1. Presentación de las series temporales
+
+```{r, warning=FALSE, echo=T}
+library(readxl)
+library(forecast)
+library(xts)
+library(ggplot2)
+library(reshape)
+library(ggfortify)
+library(tidyverse)
+library(TSA)
+library(Hmisc)
+library(stats)
+```
+
+Como se observa en el gráfico, a partir del verano de 1960 la cuota de mercado de Crest superó a la de Colgate debido al anuncio de la ADA. Desde un punto de vista de análisis de series temporales comprobamos que las series no son estacionarias en media ya que presentan claras tendencias.
+
+
+```{r fig.align = 'center'}
+# Cargamos los datos
+df <- read_xlsx('data.xlsx')
+
+
+# añadimos una columna con las fechas por semanas 
+Fechas <- as.Date(paste(df$Year, df$Week, 1, sep = "/"), "%Y/%U/%u")
+df_t <- cbind(df, Fechas)
+
+#ponemos el dataset en funcion de fechas para representar
+df_long <- melt(df_t[,c(-1,-2),], id="Fechas")
+
+#graficamos las dos series mostrando la fecha del anuncio de la ADA
+ggplot(data=df_long, aes(x = Fechas, y = value,  color = variable)) +
+  geom_line(alpha = 0.7,  position = position_jitter()) +
+  labs(y = "Couta Mercado", colour="compañia") +
+  ggtitle('Evolución cuotas de mercado de Colgate y Crest') +
+  geom_vline(mapping = aes(xintercept = as.Date("1960-08-01")), col = "black", alpha = 0.25)
+```
+
+
+Para trabajar con este dataset converitrimeos las variables en series temporales y objetos zoo.
+
+```{r}
+# convertimos las columnas en series temporales
+colgate <- ts(df$Colgate, start = 1958, frequency = 52) # 52 semnas tiene un año
+crest <- ts(df$Crest, start = 1958, frequency = 52)
+
+# convertimos en tipos zoo
+colgate_z<-as.zoo(colgate)
+crest_z<-as.zoo(crest)
+```
+
+Con el gráfico de BoxCox se comprueba que no son necesarias transformaciones logarítmicas, ya que no se reducirá de forma significativa la varinza de las series.
+
+```{r graficos de la 1 dif regular, fig.align = 'center'}
+# No es necesario utilizar transformaciones logaritmicas ya que no ganariamos estabilidad
+#siginifactiva en la varianzas de las series
+BoxCox.ar(colgate_z)
+BoxCox.ar(crest_z)
+```
+
+## 2. Modelos ARIMA
+
+El objeto de nuestro trabajo será separar el dataset en dos partes, la primera con valores hasta finales de 1962, que utilizaremos para generar los modelos, y la segunda con las 16 primeras semanas de 1963, que utilizaremos para la predicción.
+
+```{r elemntos a predecir}
+t <- length(colgate_z)
+f <- 16
+
+#muestra test
+train_colgate <- window(colgate_z, 
+                        start = index(colgate_z[1]), 
+                        end = index(colgate_z[t - f]))
+train_crest <- window(crest_z, 
+                      start = index(crest_z[1]), 
+                      end = index(crest_z[t - f]))
+#preddicion
+test_colgate <- window(colgate_z, 
+                       start = index(colgate_z[t - f +1]), 
+                       end = index(colgate_z[t]))
+test_crest <- window(crest_z, 
+                     start = index(crest_z[t - f +1]), 
+                     end = index(crest_z[t]))
+```
+
+### 2.1. Colgate
+
+El modelo ARIMA que se obtiene para la serie de Colgate es una media móvil de orden 1 en la parte regular y un autoregresivo de orden 1 en la parte estacional. Además, ha sido necesaria una diferencia regular para convertir la serie a estacionaria
+
+Con el correlograma de los residuos y el contraste de Ljung se observa que estos siguen un ruido blanco, por lo que podemos decir que el modelo estimado es válido estadisticamente.
+
+```{r modelos arima colgate, fig.align = 'center'}
+mcolgate_arima <- auto.arima(train_colgate)
+summary(mcolgate_arima)
+
+#vemos que los residuos se comportan como ruido blanco
+ggtsdisplay(mcolgate_arima$residuals)
+Box.test(mcolgate_arima$residuals,lag=24, fitdf=2, type="Lj")
+```
+
+Antes de realizar el aálisis de intervencion buscamos posibles outliers en la serie temporal de Colgate pero no detectamos ninguno, ni en el modelo arima especificado ni el los residuos de dicho modelo.
+
+```{r outliers en colgate arima}
+detectAO(mcolgate_arima) 
+
+detectIO(mcolgate_arima)
+```
+
+
+### 2.2. Crest
+
+El modelo ARIMA que se estima para la serie de Crest es una media móvil de orden 1 en la parte regular y sin estructura en la parte estacional. Se ha tomado también una diferencia regular para convertir la serie a estacionaria. Con el correlgrama de los residuos y el contraste de Ljung se comprueba que el modelo es válido estadisticamente.
+
+```{r modelos arima crest, fig.align = 'center'}
+mcrest_arima <- auto.arima(train_crest)
+summary(mcrest_arima)
+
+#vemos que los residuos se comportan como ruido blanco
+ggtsdisplay(mcrest_arima$residuals)
+Box.test(mcrest_arima$residuals,lag=24, fitdf=2, type="Lj")
+```
+
+En la serie temporal de colgate detectamos 3 outliers en el modelo arima especificado, que corresponden con las observaciones 135, 136 y 138 y que posterioremnte se introduciran en el análisis de intervencion. 
+
+```{r outliers en crest arima}
+detectAO(mcrest_arima) 
+
+detectIO(mcrest_arima)
+```
+
+## 3. Modelos ARIMAX, análisis de intervención y outliers.
+
+### 3.1. Colgate
+
+Con el modelo ARIMAX realizamos el anális de intervención. En el caso de Colgate hemos colocado una variable impulso en la semana número 50 de 1959 y una variable escalón en la semana numero 30 de 1960, que corresponde con el anuncio de la ADA a favor del uso de productos de la marca Crest. No hemos introducido ningun otro outliers ya que no creeemos que sea necesario.
+
+En el grafico se muestra como nuestro modelo capta, casi a la perfección, las dos distorsiones que sufre la serie, lo que genera un modelo mas completo a la hora de predicciones futuras. 
+
+```{r intervencion COLGATE, fig.align = 'center'}
+max_colgate <- arimax(train_colgate,order=c(0,1,1),               seasonal=list(order=c(1,0,0),period=52),
+xtransf = data.frame(I5059=1*(seq(train_colgate)==102),
+                     E3060=1*(seq(train_crest)>=134)),
+           transfer=list(c(1,0), c(1,0)),
+           method='ML')
+
+max_colgate
+
+#grafico del ajuste
+plot(train_colgate ,ylab='train_colgate')
+lines(fitted(max_colgate), col = 'purple')
+max_colgate$coef
+```
+Despues de la intervención buscamos outliers en el modelo y en sus residuos y observamos que no los hay.
+```{r}
+detectAO(max_colgate) 
+
+detectIO(max_colgate)
+```
+
+
+### 3.2. Crest
+
+En primer lugar, generaremos un modelo ARIMAX para la serie Crest sin tener en cuenta los outliers detectados, para asi realizar una comparación entre ambos modelos.
+
+El anális de intervención realizado consta de un escalón abrupto en el mes de agosto de 1960, por las mismas razones que en la serie de Colgate. 
+
+```{r intervencion en crest, fig.align = 'center'}
+max_crest <- arimax(train_crest,order=c(0,1,1),
+xtransf = data.frame(E3460=1*(seq(train_crest)>=138),
+           E3460=1*(seq(train_crest) == 137)),
+           transfer=list(c(0,0),c(1,0)),
+           method='ML')
+
+max_crest
+
+#grafico del ajuste
+plot(train_crest, ylab='train_crest')
+lines(fitted(max_crest), col = 'purple')
+```
+
+
+A continuación generamos otro modelo ARIMAX para la serie Crest introducciendo los outliers detectado con posterioridad, y comprobamos que mejoramos el valor del criterio AIC ya que nuestro nuevo modelo se adapta mejor a los datos atípicos.
+
+```{r Modelo ARIMAX de Crest con outliers, fig.align = 'center'}
+max_crest_O <- arimax(train_crest,order=c(0,1,1),
+xtransf = data.frame(E3460=1*(seq(train_crest)>=138),
+           E3460=1*(seq(train_crest) == 137)),
+           transfer=list(c(0,0),c(1,0)),
+           xreg=data.frame(o3160=1*(seq(train_crest)==135),
+                           o3260=1*(seq(train_crest)==136),
+                           o0562=1*(seq(train_crest)==213)),
+           method='ML')
+
+max_crest_O
+
+#grafico del ajuste
+plot(train_crest, ylab='train_crest')
+lines(fitted(max_crest_O), col = 'purple')
+```
+
+Para terminar este apartado buscaremos si sigue habiendo ouliers en nuestro modelo o en sus residuos despues de esta segunda intervención, y comprobamos que no. 
+
+
+```{r}
+detectAO(max_crest_O) 
+
+detectIO(max_crest_O)
+```
+
+
+
+## 4. Funcion de transferencia. 
+
+### 4.1. Crest en funcion de Colgate
+
+Generamos una función de transferencia con un k = 15 que nos relacione la serie temporal de Crest con la de Colgate. Para ello especificamos el modelo ARIMA para la serie temporal Colgate con menor valor del criterio de información AIC, y estimamos por máxima verosimilitud.
+
+```{r funcion trasnferencia}
+trans <- arimax(train_colgate, order=c(0,1,1),
+               seasonal=list(order=c(1,0,0),period=52),
+               include.mean=TRUE,
+               xtransf=train_crest,
+               transfer=list(c(0,15)),
+               method="ML")
+```
+
+Una vez que tenemos los parametros estimados podemos observar como solo hay un parámetro no significativo antes del primer parametro significativo y no podemos determinar ninguna estructura de decaimiento. Por lo que los valores asociados a nuestra función de transferencia serian:
+
+b = 1
+
+r = 0
+
+s = 0
+
+
+```{r fig.align = 'center'}
+summary(trans)
+
+ggtsdisplay(trans$residuals)
+plot(trans$coef[2:17], type="h") # b = 1, r = 0, s = 0
+```
+
+Volvemos a definir la funcion de transferencia a partir de los valores elegidos
+
+```{r }
+trans_1 <- arimax(train_colgate, order=c(0,1,1),
+                seasonal=list(order=c(1,0,0),period=52),
+               include.mean=TRUE,
+               fixed=c(NA,NA,0,NA),
+               xtransf=train_crest,
+               transfer=list(c(0,1)),
+               method="ML")
+```
+
+
+```{r fig.align = 'center'}
+summary(trans_1)
+ggtsdisplay(trans_1$residuals)
+plot(trans_1$coef[2:17], type="h")
+```
