@@ -1,0 +1,192 @@
+---
+title: "Series temporales BMW y Volkswagen"
+author: "Adrián González Retamosa"
+date: "11/30/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+  pdf_document: default
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE)
+```
+
+# OBJETIVO
+
+El objetivo de este trabajo es generar un modelo GARCH para la serie temporal de los rendimientos de de BMW para corregir la heteroscedasticidad de la varinza de los residuos. Y por otro lado, generar un modelo VAR para comprobar si hay efectos dinámicos entre BMW y Volkswagen.
+
+# Indice
+
+1. Modelo Garch serie BMW
+
+2. Modelo VAR
+
+```{r librerias}
+library(quantmod)
+library(forecast)
+library(fGarch)
+library(ggplot2)
+library(dplyr)
+library(vars)
+```
+
+
+```{r extracción de datos}
+getSymbols('BMW.DE', from = '2014-01-01', to = Sys.Date())
+s_bmw <- BMW.DE[,6]
+
+getSymbols('VOW.DE', from = '2014-01-01', to = Sys.Date())
+s_vol <- VOW.DE[,6]
+```
+
+## 1. Modelo GARCH de BMW
+
+Calculamos la rentabilidad diaria de la serie de BMW.
+
+```{r RENTABILIDAD}
+ren_bmw = dailyReturn(s_bmw, type='log', leading=FALSE)
+ren_bmw=na.exclude(ren_bmw)
+```
+
+Entendiendo la volatilidad como la rentabilidad al cuadrado, construimos un gráfico que nos represente la evolucion de la serie, de la rentabilidad y de la volatilidad. 
+
+```{r GRAFICO RENT, VOLAT Y SERIE}
+plot.zoo(cbind(Ad(s_bmw),ren_bmw,ren_bmw^2), main = 'Serie, rendimiento y volatilidad', ylab = '', xlab = 'Fecha')
+```
+
+Realizamos el siguiente test para comprobar, si como dice la teoria, la media de la rentabilidad es 0. Obtenemos un p-valor igual a 0.8 por lo que no rechazamos que la media sea 0.
+
+```{r TEST MEDIA}
+t.test(ren_bmw) # no rechazamos media = 0
+```
+Generamos la serie temporal de la volatilidad de la rentabilidad de BMW para observar su correlograma y comprobar si es un ruido blanco. Tanto en el grafico, como en el test a 40 retardos, se puede verificar que la serie de volatilidad no es ruido blanco, lo que significa que la varinza de la serie de la rentabilidad de BMW no es constante.
+
+```{r SERIE VOLAT}
+vol_bmw <- ren_bmw^2
+tsdisplay(vol_bmw) # vemos que la volatilidad no es ruido blanco
+Box.test(vol_bmw, lag=40, type="Lj")
+```
+
+Con el test de Lagrange obtenemos la conclusión de que la serie de rentabilidad de BMW si presenta efectos GARCH, por lo que será necesario estimar un modelo de heteroscedasticidad condicionada. 
+
+```{r TEST LAGRANGE}
+# Definomos la funcion del test
+T.Lag <- function(r,m){
+  y = (r - mean(r))^2
+  t = length(r)
+  a = y [(m +1) : t]
+  x = matrix(0, (t - m), m)
+  for (i in 1:m){
+    x[,i] = y [(m+1-i):(t-i)]
+  }
+  md = lm(a~x)
+  summary(md)
+}
+
+T.Lag(ren_bmw, m = 20) # rechazamos la H0 de que no hay efectos GARCH
+```
+
+El primer modelo que estimamos para corregir la heteroscedasticidad de la varianza es una GARCH(1,1), es decir, definimos la varinza del modelo en funcion de un retardo de la propia varinza y un retardo del error del modelo.
+
+Al estimar dicho modelo, ademas de no distribuirse los errores como una normal, seguimos teniendo efectos GARCh por lo que debemos plantera otro modelo. 
+
+Realizamos el correlograma de los resiudos al cuadrado y observamos que son un ruido blanco. Y con el gráfico QQ-plot vemos que no es una normal, lo que solventaremos en la estimacion del proximo modelo
+
+```{r (1,1)}
+m_garch =garchFit(~1+garch(1,1), data=ren_bmw, trace=F)
+summary(m_garch)
+
+residuos=residuals(m_garch,standardize=T) #residuals 
+residuos=xts(residuos, order.by=index(ren_bmw)) #residuals as xts 
+tsdisplay(residuos^2) 
+Box.test(residuos^2, lag=40, type="Lj")
+
+plot(m_garch, which = c(2,13,0))
+
+```
+
+El siguiente modelo planteado es un GARCH(2,2), es decir, dos retardos de la varinza y dos de los errores del modelo. Con este modelo eliminamos los efectos GARCH y obtenemos una varinza cosbtante.
+
+```{r (2,2)}
+m_garch2 =garchFit(~1+garch(1,2), data=ren_bmw, trace=F)
+summary(m_garch2)
+
+residuos2=residuals(m_garch2,standardize=T) #residuals 
+residuos2=xts(residuos2, order.by=index(ren_bmw)) #residuals as xts 
+tsdisplay(residuos2^2) 
+Box.test(residuos2^2, lag=40, type="Lj")
+
+plot(m_garch, which = c(2,13,0))
+
+```
+
+
+Una vez que tenemos estimado un modelo sin efectos GARCH pasamos a la prediccion de la rentabilidad de la serie. Solo hemos cogido 100 datos y hemos construido un IC al 90%, lo importante no es la predicción puntual si no si nos encontramos fuera o dentro de los intervalos.
+
+```{r}
+predict(m_garch2)
+
+predict(m_garch2, n.ahead = 10, plot=TRUE, conf = .9, nx=100)
+```
+
+
+
+## Modelo VAR 
+
+El objetivo de este apartado es generar un modelo VAR de las series de rendimientos diarios de BMW y VOLKSWAGEN. Para ello, generamos primeros un dataframe con los rendiemientos diarios de ambos activos.
+
+```{r}
+ren_vol <- dailyReturn(s_vol)
+df_ren <- cbind(ren_bmw, ren_vol)
+df_ren <- na.omit(df_ren)
+colnames(df_ren)=c("BMW","VOL")
+```
+
+Después realizamos un gráfico para seguir la evolucion del valor de los dos activos y sus rendimientos 
+
+```{r gr.evolucion}
+df <- cbind(s_bmw, s_vol)
+
+autoplot(df, facets = FALSE) +
+  ggtitle("Evolucion valor en bolsa") +
+  xlab("Tiempo") +
+  ylab("Valor")
+
+autoplot(df_ren, alpha = 0.7, facets = FALSE) +
+  ggtitle("Evolucion rendimientos") +
+  xlab("Tiempo") +
+  ylab("Valor")
+```
+
+El modelo VAR estimado presenta parametros estadisticamente significativos al 90% de confinza, los siguientes pasos será ver si las predicciones que realizan son adecuadas.
+
+Con el test de causalidad también se observa que no hay una relación dinámica, es decir, no hay relacion bidireccional que nos permita explicar una serie en función de otra.
+
+```{r VARS }
+m_var <- VAR(df_ren)
+summary(m_var) # hay una significativa
+
+causality(m_var) # rechazamos, puede haber bidericcionalidad
+```
+
+Con estos dos gráfico observamos que no hay efectos dinámicos entre ambas series, un impulso positivo en BMW genera efectos de una correlacion cercana a 1 solo de forma contemporanea-
+
+Por otro lado, un impuslo positivo en Volkswagen genera una respuesta positiva en en perido posterior en BMW, y nada en periodos posteriores.
+
+```{r SHCOKS}
+shock_m_var <- irf(m_var) 
+shock_m_var
+plot(shock_m_var)
+```
+
+
+Por último, calculamos las predicciones de nuestro modelo VAR, aunque como observamos no son muy buenas ya que todas son valores muy proximos a 0. 
+
+
+```{r prediccion VAR}
+predict(m_var, n.ahead = 8, ci = 0.95, plot = T)
+```
+
+
