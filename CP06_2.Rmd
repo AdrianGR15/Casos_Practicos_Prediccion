@@ -1,0 +1,78 @@
+---
+title: "Cointegración Volkswagen y BMW"
+author: "Adrián González Retamosa"
+date: "12/12/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.height = 5, fig.width = 10, fig.align = 'center')
+```
+
+El objetivo de este trabajo es comprobar si las series temporales de BMW y Volkswagen desde el 2014 hasta la actualidad están cointegraas. Para ello seguiremos los siguientes pasos:
+
++ Ver el orden de integración de nuestras dos series
+
++ Realizar un modelo lineal para ver el orden de integracion de los residuos 
+
+```{r libraries}
+library(quantmod)
+library(forecast)
+library(patchwork)
+require(tseries)
+library(PairTrading)
+```
+
+En este primer gráfico observamos las series de BMW y Volkswagen desde el año 2014 hasta finales de 2020.
+
+```{r series}
+# Cargamos las series
+bmw <- getSymbols("BMW.DE",env=NULL, from="2014-01-01",to="2020-12-5")[,6]
+vol <- getSymbols("VOW.DE",env=NULL,from="2014-01-01",to="2020-12-5")[,6]
+
+# Unimos en un df
+series <- cbind(bmw, vol)
+series <- na.omit(series)
+
+
+autoplot(series[,1])/autoplot(series[,2])
+```
+
+Realizando los test aumentados de Dickey fuller observamos que la serie BMW es integrada de orden 1 y la serie de Volkswagen también, por lo que estas dos series estarán cointegradas si una combinación lineal de ambas es estacionaria. 
+
+```{r test estacionariedad}
+adf.test(series[,1]) # no es estacionaria
+d_bmw <- diff(series[,1])
+d_bmw<- na.exclude(d_bmw)
+adf.test(d_bmw) # vemos que la serie bmw es integrada de orden 1
+
+adf.test(series[,2]) # no es estacionaria
+d_vol <- diff(series[,2])
+d_vol <- na.exclude(d_vol)
+adf.test(d_vol) # vemos que la serie vol es integrada de orden 1
+```
+
+Generamos un modelo lineal para ver que orden de integracion tienen los residuos de dicho modelo, es decir, una combinacion lineal de ambas series. Comprobamos que los residuos de este modelo no serian estacionarios por lo que podemos afirmar que la serie de BMW y Volkswagen no están cointegradas. 
+
+```{r modelo linel}
+model <- lm(BMW.DE.Adjusted ~., data = series)
+residuos <- model$residuals
+
+adf.test(residuos, alternative="stationary", k=0)
+plot(model$residuals)
+```
+
+Añadimos esta segunda forma para comprobar si una combinación lineal de nuestras series daría una serie estacionaria. Y obtenemos el mismo resultado, ya que los residuos de este modelo tampoco son estacionarios. 
+
+```{r}
+reg <- EstimateParameters(series, method = lm)
+
+IsStationary(reg$spread, 0.05)
+```
+
+

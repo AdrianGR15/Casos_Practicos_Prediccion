@@ -1,0 +1,99 @@
+---
+title: "Casual Impact DieselGate"
+author: "Adrián González Retamosa"
+date: "12/12/2020"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.height = 5, fig.width = 10, fig.align = 'center')
+```
+
+```{r librerias}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(xts)
+library(CausalImpact)
+library(quantmod)
+library(patchwork)
+```
+
+En el presente trabajo nos proponemos analizar como hubise sido la evolución del valor de las empresas BMW y Volkswagen si no se hubise producido el intento de fraude, en cuanto a las emisisones de gases contaminantes, por parte de Volkswagen en septiembre de 2015. 
+
+Para ello utilizaremos el modelo de Causal Impactact desarrollado por Google.
+
+```{r quantmod}
+getSymbols('BMW.DE', from = '2014-01-01', to = '2020-12-01')
+getSymbols('VOW.DE', from = '2014-01-01', to = '2020-12-01')
+```
+Con el siguiente gráfico se observa de forma clara lo que supuso el dieselgate, gran descenso en el valor de Volkswagen y en menor medida de BMW. 
+
+```{r series}
+series <- cbind(BMW.DE[,6], VOW.DE[,6])
+autoplot(series[,1])/autoplot(series[,2])
+series <- as.data.frame(series)
+series <- cbind(series, fecha = rownames(series))
+series <- na.omit(series)
+
+series1 <- cbind(VOW.DE[,6], BMW.DE[,6])
+series1 <- as.data.frame(series1)
+series1 <- cbind(series1, fecha = rownames(series1))
+series1 <- na.omit(series1)
+```
+
+Para la realización de este modelo debemos dividir nuestro datos en dos partes, atendiendo a la fecha en la que ocurrio el dieselgate. 
+
+```{r intervenci}
+periodo0 <- as.Date(c("2014-01-01", "2015-09-19")) # antes de la intervencio
+periodo1 <- as.Date(c("2015-09-30", '2020-12-01'))
+```
+
+El primer modelo que hemos generado es la estimacion de como hubiera evolucionado el valor de BMW si Volkswagen no hubiese tratado de estafar en relacion a los gases emitidos por sus coches.
+
+Los resultados nos indican que el valor de la empresa en media hubiera pasado de 67 a 63, ya que este hecho provocó que uno de sus principales competidores estuviera en el punto de mira por fraude. Los resultados nos indican que este hecho tuvo un efecto absoluto positivo del 3.3% sobre el valor de BMW.
+
+```{r estimacionB}
+diesel_causal_bmw <- CausalImpact(series[,c(1,2)], 
+                             pre.period = periodo0, 
+                             post.period = periodo1)
+```
+
+
+```{r rtdB}
+summary(diesel_causal_bmw) # dime el modelo. me dice la media semanla del impacto y su acumulado, la pred es lo que serian las ventas si no hubiesemos hecho la intervenciom
+plot(diesel_causal_bmw) # grafique 
+plot(diesel_causal_bmw, "original") # solo el primer grafico, me muestra como hubiese sido sin la intervenciom
+```
+
+Si planteamos el mismo modelo para Volkswagen observamos lo contrario, ya que la empresa hubiera valido en media 147 en vez de 136. Los resultados nos indican que el dieselgate provocó una disminucion del valor de la empresa, de forma absoluta, de un 10%.
+
+
+```{r estimacionV}
+diesel_causal_vol <- CausalImpact(series1[,c(1,2)], 
+                             pre.period = periodo0, 
+                             post.period = periodo1)
+```
+
+
+```{r rtdoV}
+summary(diesel_causal_vol) 
+plot(diesel_causal_vol) 
+plot(diesel_causal_vol, "original") 
+```
+
+Como se comentó en clase, este paquete tiene una función de inteligencia artificial que genera un infome de forma automática para ambos modelos.
+
+```{r reporteB}
+summary(diesel_causal_bmw, "report")
+```
+
+```{r reporteV}
+summary(diesel_causal_vol, "report")
+```
+
